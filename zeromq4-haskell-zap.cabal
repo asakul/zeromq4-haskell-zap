@@ -40,4 +40,4 @@ test-suite zeromq4-haskell-zap-test
 
 source-repository head
   type:     git
-  location: https://github.com/githubuser/zeromq4-haskell-zap
+  location: https://github.com/asakul/zeromq4-haskell-zap
