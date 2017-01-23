@@ -1,0 +1,43 @@
+name:                zeromq4-haskell-zap
+version:             0.1.0.0
+synopsis:            ZAP support for zeromq
+description:         Please see README.md
+homepage:            https://github.com/asakul/zeromq4-haskell-zap
+license:             BSD3
+license-file:        LICENSE
+author:              Denis Tereshkin
+maintainer:          Denis Tereshkin <denis@kasan.ws>
+copyright:           2017 Denis Tereshkin
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     System.ZMQ4.ZAP
+  build-depends:       base >= 4.7 && < 5
+                     , zeromq4-haskell
+                     , bytestring
+                     , text
+                     , monad-loops
+  default-language:    Haskell2010
+
+test-suite zeromq4-haskell-zap-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , zeromq4-haskell-zap
+                     , zeromq4-haskell
+                     , bytestring
+                     , text
+                     , tasty
+                     , tasty-hunit
+                     , tasty-quickcheck
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/githubuser/zeromq4-haskell-zap
