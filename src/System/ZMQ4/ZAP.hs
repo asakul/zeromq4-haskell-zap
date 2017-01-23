@@ -75,19 +75,14 @@ startZapHandler ctx = do
             response <- makeResponse m params
             sendMulti sock response
           Nothing -> sendMulti sock (make400Response B.empty "")
-    putStrLn "killing time"
-    putMVar killmv ()
-    putStrLn "time killed"
-    )
+    putMVar killmv ())
   return (paramsRef, tid)
 
 stopZapHandler :: Zap -> IO ()
 stopZapHandler (params, tid) = do
   mv <- zpMv <$> readIORef params
   atomicModifyIORef' params (\p -> (p { zpKill = True }, ()) )
-  putStrLn "Foo"
   void $ takeMVar mv
-  putStrLn "Bar"
 
 withZapHandler :: Context -> (Zap -> IO a) -> IO a
 withZapHandler ctx action = bracket (startZapHandler ctx) stopZapHandler action
