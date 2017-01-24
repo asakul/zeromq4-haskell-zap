@@ -26,10 +26,12 @@ testPlainAuth = testGroup "Testing Plain authentication mechanism" [ testPlainAu
 testendpoint port = "tcp://127.0.0.1:" ++ show port
 
 testNullAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
-  withZapHandler ctx (\zap -> do
-    zapWhitelist zap "127.0.0.1"
-    withSocket ctx Rep (\server -> do
-      withSocket ctx Req (\client -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+      withZapHandler ctx (\zap -> do
+        zapWhitelist zap "127.0.0.1"
         setZapDomain "global" server
         bind server $ testendpoint 7737
         connect client $ testendpoint 7737
@@ -39,24 +41,30 @@ testNullAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
         v <- receive server
         assertEqual "" (decodeUtf8 v) "foobar"))))
   
-testNullAuthDenied = testCase "Blacklist scenario" $ withContext (\ctx -> do
-  withZapHandler ctx (\zap -> do
-    zapBlacklist zap "127.0.0.1"
-    withSocket ctx Rep (\server ->
+testNullAuthDenied = testCase "Blacklist scenario" $ do
+  withContext (\ctx -> do
+    withSocket ctx Rep (\server -> do
+      setLinger (restrict 0) server
       withSocket ctx Req (\client -> do
-        setZapDomain "global" server
-        bind server $ testendpoint 7738
-        connect client $ testendpoint 7738
+        setLinger (restrict 0) client
+        withZapHandler ctx (\zap -> do
+          zapBlacklist zap "127.0.0.1"
+          setZapDomain "global" server
+          bind server $ testendpoint 7738
+          connect client $ testendpoint 7738
 
-        send client [] $ encodeUtf8 "foobar"
-        events <- poll 100 [Sock server [In] Nothing]
-        assertBool "" (null . head $ events)))))
+          send client [] $ encodeUtf8 "foobar"
+          events <- poll 100 [Sock server [In] Nothing]
+          assertBool "" (null . head $ events)
+          ))))
   
 testPlainAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
-  withZapHandler ctx (\zap -> do
-    zapSetPlainCredentialsFilename zap "test/secret"
-    withSocket ctx Rep (\server -> do
-      withSocket ctx Req (\client -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+      withZapHandler ctx (\zap -> do
+        zapSetPlainCredentialsFilename zap "test/secret"
         setPlainServer True server
         setPlainUserName (restrict $ encodeUtf8 "testuser") client
         setPlainPassword (restrict $ encodeUtf8 "testpassword") client
@@ -70,10 +78,12 @@ testPlainAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
         assertEqual "" (decodeUtf8 v) "foobar"))))
   
 testPlainAuthInvalidPassword = testCase "Invalid password, existing user" $ withContext (\ctx -> do
-  withZapHandler ctx (\zap -> do
-    zapSetPlainCredentialsFilename zap "test/secret"
-    withSocket ctx Rep (\server ->
-      withSocket ctx Req (\client -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+      withZapHandler ctx (\zap -> do
+        zapSetPlainCredentialsFilename zap "test/secret"
         setPlainServer True server
         setPlainUserName (restrict $ encodeUtf8 "testuser") client
         setPlainPassword (restrict $ encodeUtf8 "invalid password") client

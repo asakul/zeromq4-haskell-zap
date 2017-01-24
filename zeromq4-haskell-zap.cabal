@@ -21,6 +21,7 @@ library
                      , bytestring
                      , text
                      , monad-loops
+                     , hslogger
   default-language:    Haskell2010
 
 test-suite zeromq4-haskell-zap-test

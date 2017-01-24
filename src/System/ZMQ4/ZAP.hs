@@ -29,16 +29,17 @@ import Data.List.NonEmpty
 import qualified System.ZMQ4.Internal.Base as ZB
 import System.IO
 import qualified Data.Text.IO as TIO
+import System.Log
+import System.Log.Logger
 
 data ZapParams = ZapParams {
-  zpKill :: Bool,
   zpMv :: MVar (),
   zpIpWhitelist :: [T.Text],
   zpIpBlacklist :: [T.Text],
   zpPlainPasswordsFile :: Maybe FilePath
 }
 
-type Zap = (IORef ZapParams, ThreadId)
+type Zap = (IORef ZapParams, Context, ThreadId)
 
 data ZapRequest = ZapRequest {
   zrqVersion :: T.Text,
@@ -50,6 +51,8 @@ data ZapRequest = ZapRequest {
   zrqCredentials :: [B.ByteString]
 } deriving (Show, Eq)
 
+zapSignalEndpoint = "inproc://zeromq.zap.01-signal"
+
 setZapDomain :: T.Text -> Socket a -> IO ()
 setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
 
@@ -57,50 +60,58 @@ startZapHandler :: Context -> IO Zap
 startZapHandler ctx = do
   killmv <- newEmptyMVar
   paramsRef <- newIORef ZapParams {
-    zpKill = False,
     zpMv = killmv,
     zpIpWhitelist = [],
     zpIpBlacklist = [],
     zpPlainPasswordsFile = Nothing}
 
-  tid <- forkIO $ withSocket ctx Rep (\sock -> do
-    bind sock "inproc://zeromq.zap.01"
-    whileM_ (not . zpKill <$> readIORef paramsRef) $ do
-      events <- poll 500 [Sock sock [In] Nothing]
-      unless (L.null . L.head $ events) $ do
-        msg <- parseMessage <$> receiveMulti sock
-        params <- readIORef paramsRef
-        case msg of
-          Just m -> do
-            response <- makeResponse m params
-            sendMulti sock response
-          Nothing -> sendMulti sock (make400Response B.empty "")
-    putMVar killmv ())
-  return (paramsRef, tid)
+  tid <- forkIO $ withSocket ctx Rep (\sock ->
+    withSocket ctx Pull (\signalSock -> do
+      bind sock "inproc://zeromq.zap.01"
+      bind signalSock zapSignalEndpoint
+      killFlag <- newIORef False
+      whileM_ (not <$> readIORef killFlag) $ do
+        events <- poll 1000 [Sock sock [In] Nothing, Sock signalSock [In] Nothing]
+        unless (L.null . L.head . L.tail $ events) $ do
+          writeIORef killFlag True
+        unless (L.null . L.head $ events) $ do
+          msg <- parseMessage <$> receiveMulti sock
+          debugM "ZAP" $ "Request: " ++ show msg
+          params <- readIORef paramsRef
+          case msg of
+            Just m -> do
+              response <- makeResponse m params
+              debugM "ZAP" $ "Response: " ++ show msg
+              sendMulti sock response
+            Nothing -> sendMulti sock (make400Response B.empty "")
+      putMVar killmv ()))
+  return (paramsRef, ctx, tid)
 
 stopZapHandler :: Zap -> IO ()
-stopZapHandler (params, tid) = do
+stopZapHandler (params, ctx, tid) = do
   mv <- zpMv <$> readIORef params
-  atomicModifyIORef' params (\p -> (p { zpKill = True }, ()) )
+  withSocket ctx Push (\signalSock -> do
+    connect signalSock zapSignalEndpoint
+    send signalSock [] B.empty)
   void $ takeMVar mv
 
 withZapHandler :: Context -> (Zap -> IO a) -> IO a
 withZapHandler ctx action = bracket (startZapHandler ctx) stopZapHandler action
 
 zapWhitelist :: Zap -> T.Text -> IO ()
-zapWhitelist (paramsRef, _) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newIp : zpIpWhitelist p }, ())) 
+zapWhitelist (paramsRef, _ ,_) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newIp : zpIpWhitelist p }, ())) 
 
 zapBlacklist :: Zap -> T.Text -> IO ()
-zapBlacklist (paramsRef, _) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newIp : zpIpBlacklist p }, ()))
+zapBlacklist (paramsRef, _, _) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newIp : zpIpBlacklist p }, ()))
 
 zapSetWhitelist :: Zap -> [T.Text] -> IO ()
-zapSetWhitelist (paramsRef, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newList }, ())) 
+zapSetWhitelist (paramsRef, _, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newList }, ())) 
 
 zapSetBlacklist :: Zap -> [T.Text] -> IO ()
-zapSetBlacklist (paramsRef, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newList }, ()))
+zapSetBlacklist (paramsRef, _, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newList }, ()))
 
 zapSetPlainCredentialsFilename :: Zap -> FilePath -> IO ()
-zapSetPlainCredentialsFilename (paramsRef, _) filepath = atomicModifyIORef' paramsRef (\p -> (p { zpPlainPasswordsFile = Just filepath }, ()))
+zapSetPlainCredentialsFilename (paramsRef, _, _) filepath = atomicModifyIORef' paramsRef (\p -> (p { zpPlainPasswordsFile = Just filepath }, ()))
 
 parseMessage :: [B.ByteString] -> Maybe ZapRequest
 parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials) = 
