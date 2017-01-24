@@ -17,11 +17,13 @@ tests :: TestTree
 tests = testGroup "Tests" [unitTests]
 
 unitTests = testGroup "Unit tests" 
-  [ testNullAuth, testPlainAuth ]
+  [ testNullAuth, testPlainAuth, testCurveAuth ]
 
 testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied ]
 
 testPlainAuth = testGroup "Testing Plain authentication mechanism" [ testPlainAuthOk, testPlainAuthInvalidPassword ]
+
+testCurveAuth = testGroup "Testing Curve authentication mechanism" [ testCurveAuthOk, testCurveInvalidCertificate ]
 
 testendpoint port = "tcp://127.0.0.1:" ++ show port
 
@@ -90,6 +92,54 @@ testPlainAuthInvalidPassword = testCase "Invalid password, existing user" $ with
 
         bind server $ testendpoint 7740
         connect client $ testendpoint 7740
+
+        send client [] $ encodeUtf8 "foobar"
+        events <- poll 100 [Sock server [In] Nothing]
+        assertBool "" (null . head $ events)
+        ))))
+
+testCurveAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    serverCert <- generateCertificate
+    setCurveServer True server
+    zapApplyCertificate serverCert server
+
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+
+      clientCert <- generateCertificate
+      zapApplyCertificate clientCert client
+      zapSetServerCertificate (withoutSecretKey serverCert) client
+
+      withZapHandler ctx (\zap -> do
+        zapAddClientCertificate zap (withoutSecretKey clientCert)
+        bind server $ testendpoint 7741
+        connect client $ testendpoint 7741
+        threadDelay 100000
+
+        send client [] $ encodeUtf8 "foobar"
+        v <- receive server
+        assertEqual "" (decodeUtf8 v) "foobar"))))
+
+testCurveInvalidCertificate = testCase "Invalid Client Pubkey" $ withContext (\ctx -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    serverCert <- generateCertificate
+    setCurveServer True server
+    zapApplyCertificate serverCert server
+
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+
+      clientCert <- generateCertificate
+      zapApplyCertificate clientCert client
+      zapSetServerCertificate (withoutSecretKey serverCert) client
+
+      withZapHandler ctx (\zap -> do
+        bind server $ testendpoint 7742
+        connect client $ testendpoint 7742
+        threadDelay 100000
 
         send client [] $ encodeUtf8 "foobar"
         events <- poll 100 [Sock server [In] Nothing]

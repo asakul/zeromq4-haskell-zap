@@ -9,6 +9,11 @@ module System.ZMQ4.ZAP (
   zapSetWhitelist,
   zapSetBlacklist,
   zapSetPlainCredentialsFilename,
+  zapApplyCertificate,
+  zapSetServerCertificate,
+  withoutSecretKey,
+  generateCertificate,
+  zapAddClientCertificate,
   setZapDomain
 
 ) where
@@ -32,11 +37,27 @@ import qualified Data.Text.IO as TIO
 import System.Log
 import System.Log.Logger
 
+data CurveCertificate = CurveCertificate {
+  ccPubKey :: B.ByteString,
+  ccPrivKey :: Maybe B.ByteString
+} deriving (Eq)
+
+instance Show CurveCertificate where
+  show cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ privKey ++ " }"
+    where
+      privKey = case ccPrivKey cert of
+        Just key -> "***"
+        Nothing -> "Nothing"
+
+reallyShow :: CurveCertificate -> String
+reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ (show . ccPrivKey) cert ++ " }"
+
 data ZapParams = ZapParams {
   zpMv :: MVar (),
   zpIpWhitelist :: [T.Text],
   zpIpBlacklist :: [T.Text],
-  zpPlainPasswordsFile :: Maybe FilePath
+  zpPlainPasswordsFile :: Maybe FilePath,
+  zpCurveCertificates :: [CurveCertificate]
 }
 
 type Zap = (IORef ZapParams, Context, ThreadId)
@@ -63,7 +84,8 @@ startZapHandler ctx = do
     zpMv = killmv,
     zpIpWhitelist = [],
     zpIpBlacklist = [],
-    zpPlainPasswordsFile = Nothing}
+    zpPlainPasswordsFile = Nothing,
+    zpCurveCertificates = []}
 
   tid <- forkIO $ withSocket ctx Rep (\sock ->
     withSocket ctx Pull (\signalSock -> do
@@ -112,6 +134,29 @@ zapSetBlacklist (paramsRef, _, _) newList = atomicModifyIORef' paramsRef (\p -> 
 
 zapSetPlainCredentialsFilename :: Zap -> FilePath -> IO ()
 zapSetPlainCredentialsFilename (paramsRef, _, _) filepath = atomicModifyIORef' paramsRef (\p -> (p { zpPlainPasswordsFile = Just filepath }, ()))
+
+zapApplyCertificate :: CurveCertificate -> Socket a -> IO ()
+zapApplyCertificate cert sock = do
+  setCurvePublicKey BinaryFormat (restrict $ ccPubKey cert) sock
+  case ccPrivKey cert of
+    Just key -> setCurveSecretKey BinaryFormat (restrict $ key) sock
+    Nothing -> return ()
+
+zapSetServerCertificate :: CurveCertificate -> Socket a -> IO ()
+zapSetServerCertificate cert sock = setCurveServerKey BinaryFormat (restrict $ ccPubKey cert) sock
+
+withoutSecretKey :: CurveCertificate -> CurveCertificate
+withoutSecretKey cert = cert { ccPrivKey = Nothing }
+
+generateCertificate :: IO CurveCertificate
+generateCertificate = do
+  (rPub, rSec) <- curveKeyPair
+  dPub <- z85Decode rPub
+  dSec <- z85Decode rSec
+  return CurveCertificate { ccPubKey = dPub, ccPrivKey = Just dSec }
+
+zapAddClientCertificate :: Zap -> CurveCertificate -> IO ()
+zapAddClientCertificate (paramsRef, _, _) cert = atomicModifyIORef' paramsRef (\p -> (p { zpCurveCertificates = cert : zpCurveCertificates p }, ()))
 
 parseMessage :: [B.ByteString] -> Maybe ZapRequest
 parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials) = 
@@ -162,12 +207,22 @@ makeResponse msg params =
             Just correctPassword -> return $ suppliedPassword == correctPassword
             Nothing -> return False
         Nothing -> return False
+
     credentialsListFrom contents = mapMaybe credentialFromLine $ T.lines contents
     credentialFromLine t = case T.split (== '=') t of
       (un:pw:[]) -> Just (un, pw)
       _ -> Nothing
         
-    makeResponseForCurve = undefined
+    makeResponseForCurve = if not $ listsAllow (zrqAddress msg)
+      then return $ make400Response (zrqRequestId msg) ""
+      else case (zrqCredentials msg) of
+        (pubkey:_) -> do
+          return $ if validateCurveCertificate pubkey
+            then make200Response (zrqRequestId msg) ""
+            else make400Response (zrqRequestId msg) ""
+        _ -> return $ make400Response (zrqRequestId msg) ""
+
+    validateCurveCertificate pubkey = isJust $ L.find (\x -> ccPubKey x == pubkey) (zpCurveCertificates params)
 
     listsAllow address = if not . null $ whitelist
       then address `elem` whitelist
