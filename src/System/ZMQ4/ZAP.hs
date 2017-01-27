@@ -15,15 +15,19 @@ module System.ZMQ4.ZAP (
   withoutSecretKey,
   generateCertificate,
   zapAddClientCertificate,
-  setZapDomain
-
+  setZapDomain,
+  loadCertificateFromFile,
+  saveCertificateToFile
 ) where
 
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Loops
 import Control.Exception
+import Data.Aeson hiding (Null)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Base64 as B64
 import qualified Data.Text as T
 import qualified Data.List as L
 import Data.Text.Encoding
@@ -42,6 +46,25 @@ data CurveCertificate = CurveCertificate {
   ccPubKey :: B.ByteString,
   ccPrivKey :: Maybe B.ByteString
 } deriving (Eq)
+
+-- Meh
+instance FromJSON CurveCertificate where
+  parseJSON = withObject "object" (\obj -> do
+    pub <- obj .: "public_key"
+    case B64.decode . encodeUtf8 $ pub of
+      Right pubKey -> do 
+        priv <- obj .:? "secret_key"
+        case priv of
+          Just p -> case B64.decode . encodeUtf8 $ p of
+            Right privKey -> return $ CurveCertificate pubKey (Just privKey)
+            _ -> fail "CurveCertificate"
+          Nothing -> return $ CurveCertificate pubKey Nothing
+      _ -> fail "CurveCertificate")
+
+instance ToJSON CurveCertificate where
+  toJSON cert = object $ ( "public_key" .= (decodeUtf8 . B64.encode $ ccPubKey cert) ) : case ccPrivKey cert of
+    Just privKey -> [ "secret_key" .= (decodeUtf8 . B64.encode $ privKey) ]
+    Nothing -> []
 
 instance Show CurveCertificate where
   show cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ privKey ++ " }"
@@ -158,6 +181,12 @@ generateCertificate = do
 
 zapAddClientCertificate :: Zap -> CurveCertificate -> IO ()
 zapAddClientCertificate (paramsRef, _, _) cert = atomicModifyIORef' paramsRef (\p -> (p { zpCurveCertificates = cert : zpCurveCertificates p }, ()))
+
+loadCertificateFromFile :: FilePath -> IO (Either String CurveCertificate)
+loadCertificateFromFile fpath = eitherDecode . BL.fromStrict <$> B.readFile fpath
+
+saveCertificateToFile :: FilePath -> CurveCertificate -> IO ()
+saveCertificateToFile fpath cert = withFile fpath WriteMode (\h -> B.hPut h $ BL.toStrict $ encode cert)
 
 parseMessage :: [B.ByteString] -> Maybe ZapRequest
 parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials) = 
