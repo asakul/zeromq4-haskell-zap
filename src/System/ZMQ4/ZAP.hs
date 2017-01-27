@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module System.ZMQ4.ZAP (
+  CurveCertificate(..),
   startZapHandler,
   stopZapHandler,
   withZapHandler,
