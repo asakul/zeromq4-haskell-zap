@@ -127,7 +127,7 @@ startZapHandler ctx = do
           case msg of
             Just m -> do
               response <- makeResponse m params
-              debugM "ZAP" $ "Response: " ++ show msg
+              debugM "ZAP" $ "Response: " ++ show response
               sendMulti sock response
             Nothing -> sendMulti sock (make400Response B.empty "")
       putMVar killmv ()))
