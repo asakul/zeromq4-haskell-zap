@@ -3,6 +3,8 @@ module Main (
   main
 ) where
 
+
+import Data.Monoid
 import Options.Applicative
 import System.ZMQ4.ZAP
 
