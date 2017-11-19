@@ -19,7 +19,7 @@ tests = testGroup "Tests" [unitTests]
 unitTests = testGroup "Unit tests" 
   [ testNullAuth, testPlainAuth, testCurveAuth ]
 
-testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied ]
+testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied, testNullAuthDeniedIfInvalidDomain ]
 
 testPlainAuth = testGroup "Testing Plain authentication mechanism" [ testPlainAuthOk, testPlainAuthInvalidPassword ]
 
@@ -54,6 +54,23 @@ testNullAuthDenied = testCase "Blacklist scenario" $ do
           setZapDomain "global" server
           bind server $ testendpoint 7738
           connect client $ testendpoint 7738
+
+          send client [] $ encodeUtf8 "foobar"
+          events <- poll 100 [Sock server [In] Nothing]
+          assertBool "" (null . head $ events)
+          ))))
+
+testNullAuthDeniedIfInvalidDomain = testCase "Unknown domain scenario" $ do
+  withContext (\ctx -> do
+    withSocket ctx Rep (\server -> do
+      setLinger (restrict 0) server
+      withSocket ctx Req (\client -> do
+        setLinger (restrict 0) client
+        withZapHandler ctx (\zap -> do
+          zapBlacklist zap "unknown_domain" "127.0.0.1"
+          setZapDomain "global" server
+          bind server $ testendpoint 7744
+          connect client $ testendpoint 7744
 
           send client [] $ encodeUtf8 "foobar"
           events <- poll 100 [Sock server [In] Nothing]
