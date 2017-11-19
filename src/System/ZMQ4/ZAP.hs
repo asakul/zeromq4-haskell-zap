@@ -24,6 +24,7 @@ import Control.Concurrent
 import Control.Monad
 import Control.Monad.Loops
 import Control.Exception
+
 import Data.Aeson hiding (Null)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
@@ -34,14 +35,15 @@ import qualified Data.Map as M
 import Data.Text.Encoding
 import Data.IORef
 import Data.Maybe
-import System.ZMQ4
-import System.ZMQ4.Internal
 import Data.List.NonEmpty
+
 import qualified System.ZMQ4.Internal.Base as ZB
 import System.IO
 import qualified Data.Text.IO as TIO
 import System.Log
 import System.Log.Logger
+import System.ZMQ4
+import System.ZMQ4.Internal
 
 data CurveCertificate = CurveCertificate {
   ccPubKey :: B.ByteString,
@@ -103,7 +105,7 @@ type Zap = (IORef ZapParams, Context, ThreadId)
 data ZapRequest = ZapRequest {
   zrqVersion :: T.Text,
   zrqRequestId :: B.ByteString,
-  zrqDomain :: T.Text,
+  zrqDomain :: DomainId,
   zrqAddress :: T.Text,
   zrqIdentity :: B.ByteString,
   zrqMechanism :: SecurityMechanism,
@@ -113,7 +115,7 @@ data ZapRequest = ZapRequest {
 zapSignalEndpoint = "inproc://zeromq.zap.01-signal"
 zapEndpoint = "inproc://zeromq.zap.01"
 
-setZapDomain :: T.Text -> Socket a -> IO ()
+setZapDomain :: DomainId -> Socket a -> IO ()
 setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
 
 startZapHandler :: Context -> IO Zap
