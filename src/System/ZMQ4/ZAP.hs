@@ -20,33 +20,33 @@ module System.ZMQ4.ZAP (
   saveCertificateToFile
 ) where
 
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.Loops
-import Control.Exception
+import           Control.Concurrent
+import           Control.Exception
+import           Control.Monad
+import           Control.Monad.Loops
 
-import Data.Aeson hiding (Null)
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Base64 as B64
-import qualified Data.Text as T
-import qualified Data.List as L
-import qualified Data.Map as M
-import Data.Text.Encoding
-import Data.IORef
-import Data.Maybe
-import Data.List.NonEmpty
+import           Data.Aeson                hiding (Null)
+import qualified Data.ByteString           as B
+import qualified Data.ByteString.Base64    as B64
+import qualified Data.ByteString.Lazy      as BL
+import           Data.IORef
+import qualified Data.List                 as L
+import           Data.List.NonEmpty
+import qualified Data.Map                  as M
+import           Data.Maybe
+import qualified Data.Text                 as T
+import           Data.Text.Encoding
+import qualified Data.Text.IO              as TIO
 
+import           System.IO
+import           System.Log
+import           System.Log.Logger
+import           System.ZMQ4
+import           System.ZMQ4.Internal
 import qualified System.ZMQ4.Internal.Base as ZB
-import System.IO
-import qualified Data.Text.IO as TIO
-import System.Log
-import System.Log.Logger
-import System.ZMQ4
-import System.ZMQ4.Internal
 
 data CurveCertificate = CurveCertificate {
-  ccPubKey :: B.ByteString,
+  ccPubKey  :: B.ByteString,
   ccPrivKey :: Maybe B.ByteString
 } deriving (Eq)
 
@@ -55,26 +55,26 @@ instance FromJSON CurveCertificate where
   parseJSON = withObject "object" (\obj -> do
     pub <- obj .: "public_key"
     case B64.decode . encodeUtf8 $ pub of
-      Right pubKey -> do 
+      Right pubKey -> do
         priv <- obj .:? "secret_key"
         case priv of
           Just p -> case B64.decode . encodeUtf8 $ p of
             Right privKey -> return $ CurveCertificate pubKey (Just privKey)
-            _ -> fail "CurveCertificate"
+            _             -> fail "CurveCertificate"
           Nothing -> return $ CurveCertificate pubKey Nothing
       _ -> fail "CurveCertificate")
 
 instance ToJSON CurveCertificate where
   toJSON cert = object $ ( "public_key" .= (decodeUtf8 . B64.encode $ ccPubKey cert) ) : case ccPrivKey cert of
     Just privKey -> [ "secret_key" .= (decodeUtf8 . B64.encode $ privKey) ]
-    Nothing -> []
+    Nothing      -> []
 
 instance Show CurveCertificate where
   show cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ privKey ++ " }"
     where
       privKey = case ccPrivKey cert of
         Just key -> "***"
-        Nothing -> "Nothing"
+        Nothing  -> "Nothing"
 
 reallyShow :: CurveCertificate -> String
 reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ (show . ccPrivKey) cert ++ " }"
@@ -82,15 +82,15 @@ reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ 
 type DomainId = T.Text
 
 data ZapParams = ZapParams {
-  zpMv :: MVar (),
+  zpMv           :: MVar (),
   zpDomainParams :: M.Map DomainId ZapDomainParams
 }
 
 data ZapDomainParams = ZapDomainParams {
-  zpIpWhitelist :: [T.Text],
-  zpIpBlacklist :: [T.Text],
+  zpIpWhitelist        :: [T.Text],
+  zpIpBlacklist        :: [T.Text],
   zpPlainPasswordsFile :: Maybe FilePath,
-  zpCurveCertificates :: [CurveCertificate]
+  zpCurveCertificates  :: [CurveCertificate]
 }
 
 defaultDomainParams = ZapDomainParams {
@@ -103,12 +103,12 @@ defaultDomainParams = ZapDomainParams {
 type Zap = (IORef ZapParams, Context, ThreadId)
 
 data ZapRequest = ZapRequest {
-  zrqVersion :: T.Text,
-  zrqRequestId :: B.ByteString,
-  zrqDomain :: DomainId,
-  zrqAddress :: T.Text,
-  zrqIdentity :: B.ByteString,
-  zrqMechanism :: SecurityMechanism,
+  zrqVersion     :: T.Text,
+  zrqRequestId   :: B.ByteString,
+  zrqDomain      :: DomainId,
+  zrqAddress     :: T.Text,
+  zrqIdentity    :: B.ByteString,
+  zrqMechanism   :: SecurityMechanism,
   zrqCredentials :: [B.ByteString]
 } deriving (Show, Eq)
 
@@ -162,7 +162,7 @@ withDomainEntry (paramsRef, _, _)  domain f = atomicModifyIORef' paramsRef (\p -
   where
     applyF x = case x of
       Just params -> Just $ f params
-      Nothing -> Just $ f defaultDomainParams
+      Nothing     -> Just $ f defaultDomainParams
 
 zapWhitelist :: Zap -> DomainId -> T.Text -> IO ()
 zapWhitelist zap domain newIp = withDomainEntry zap domain (\params ->
@@ -188,7 +188,7 @@ zapApplyCertificate cert sock = do
   setCurvePublicKey BinaryFormat (restrict $ ccPubKey cert) sock
   case ccPrivKey cert of
     Just key -> setCurveSecretKey BinaryFormat (restrict $ key) sock
-    Nothing -> return ()
+    Nothing  -> return ()
 
 zapSetServerCertificate :: CurveCertificate -> Socket a -> IO ()
 zapSetServerCertificate cert sock = setCurveServerKey BinaryFormat (restrict $ ccPubKey cert) sock
@@ -214,7 +214,7 @@ saveCertificateToFile :: FilePath -> CurveCertificate -> IO ()
 saveCertificateToFile fpath cert = withFile fpath WriteMode (\h -> B.hPut h $ BL.toStrict $ encode cert)
 
 parseMessage :: [B.ByteString] -> Maybe ZapRequest
-parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials) = 
+parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials) =
   case parseMechanism rMechanism of
     Just m -> Just ZapRequest {
       zrqVersion = decodeUtf8 rVersion,
@@ -223,7 +223,7 @@ parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials)
       zrqAddress = decodeUtf8 rAddress,
       zrqIdentity = rIdentity,
       zrqMechanism = m,
-      zrqCredentials = rCredentials     
+      zrqCredentials = rCredentials
     }
     Nothing -> Nothing
   where
@@ -235,9 +235,9 @@ parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials)
 
 makeResponse :: ZapRequest -> ZapParams -> IO (NonEmpty B.ByteString)
 makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) of
-  Just domainParams -> 
+  Just domainParams ->
     case zrqMechanism msg of
-      Null -> makeResponseForNull domainParams
+      Null  -> makeResponseForNull domainParams
       Plain -> makeResponseForPlain domainParams
       Curve -> makeResponseForCurve domainParams
   Nothing -> return $ make400Response (zrqRequestId msg) ""
@@ -268,8 +268,8 @@ makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) 
     credentialsListFrom contents = mapMaybe credentialFromLine $ T.lines contents
     credentialFromLine t = case T.split (== '=') t of
       (un:pw:[]) -> Just (un, pw)
-      _ -> Nothing
-        
+      _          -> Nothing
+
     makeResponseForCurve domainParams = if not $ listsAllow (zrqAddress msg) domainParams
       then return $ make400Response (zrqRequestId msg) ""
       else case (zrqCredentials msg) of
@@ -284,8 +284,8 @@ makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) 
     listsAllow address domainParams = if not . null $ (zpIpWhitelist domainParams)
       then address `elem` (zpIpWhitelist domainParams)
       else address `notElem` (zpIpBlacklist domainParams)
-    
+
 make200Response rqid userId = encodeUtf8 "1.0" :| rqid : encodeUtf8 "200" : B.empty : encodeUtf8 userId : [B.empty]
 make400Response rqid userId = encodeUtf8 "1.0" :| rqid : encodeUtf8 "400" : B.empty : encodeUtf8 userId : [B.empty]
-    
+
 
