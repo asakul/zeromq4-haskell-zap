@@ -30,6 +30,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Text as T
 import qualified Data.List as L
+import qualified Data.Map as M
 import Data.Text.Encoding
 import Data.IORef
 import Data.Maybe
@@ -76,12 +77,25 @@ instance Show CurveCertificate where
 reallyShow :: CurveCertificate -> String
 reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ (show . ccPrivKey) cert ++ " }"
 
+type DomainId = T.Text
+
 data ZapParams = ZapParams {
   zpMv :: MVar (),
+  zpDomainParams :: M.Map DomainId ZapDomainParams
+}
+
+data ZapDomainParams = ZapDomainParams {
   zpIpWhitelist :: [T.Text],
   zpIpBlacklist :: [T.Text],
   zpPlainPasswordsFile :: Maybe FilePath,
   zpCurveCertificates :: [CurveCertificate]
+}
+
+defaultDomainParams = ZapDomainParams {
+  zpIpWhitelist = [],
+  zpIpBlacklist = [],
+  zpPlainPasswordsFile = Nothing,
+  zpCurveCertificates = []
 }
 
 type Zap = (IORef ZapParams, Context, ThreadId)
@@ -97,6 +111,7 @@ data ZapRequest = ZapRequest {
 } deriving (Show, Eq)
 
 zapSignalEndpoint = "inproc://zeromq.zap.01-signal"
+zapEndpoint = "inproc://zeromq.zap.01"
 
 setZapDomain :: T.Text -> Socket a -> IO ()
 setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
@@ -106,20 +121,16 @@ startZapHandler ctx = do
   killmv <- newEmptyMVar
   paramsRef <- newIORef ZapParams {
     zpMv = killmv,
-    zpIpWhitelist = [],
-    zpIpBlacklist = [],
-    zpPlainPasswordsFile = Nothing,
-    zpCurveCertificates = []}
+    zpDomainParams = M.empty }
 
   tid <- forkIO $ withSocket ctx Rep (\sock ->
     withSocket ctx Pull (\signalSock -> do
-      bind sock "inproc://zeromq.zap.01"
+      bind sock zapEndpoint
       bind signalSock zapSignalEndpoint
       killFlag <- newIORef False
       whileM_ (not <$> readIORef killFlag) $ do
         events <- poll 1000 [Sock sock [In] Nothing, Sock signalSock [In] Nothing]
-        unless (L.null . L.head . L.tail $ events) $ do
-          writeIORef killFlag True
+        unless (L.null . L.head . L.tail $ events) $ writeIORef killFlag True
         unless (L.null . L.head $ events) $ do
           msg <- parseMessage <$> receiveMulti sock
           debugM "ZAP" $ "Request: " ++ show msg
@@ -144,20 +155,31 @@ stopZapHandler (params, ctx, tid) = do
 withZapHandler :: Context -> (Zap -> IO a) -> IO a
 withZapHandler ctx action = bracket (startZapHandler ctx) stopZapHandler action
 
-zapWhitelist :: Zap -> T.Text -> IO ()
-zapWhitelist (paramsRef, _ ,_) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newIp : zpIpWhitelist p }, ())) 
+withDomainEntry :: Zap -> DomainId -> (ZapDomainParams -> ZapDomainParams) -> IO ()
+withDomainEntry (paramsRef, _, _)  domain f = atomicModifyIORef' paramsRef (\p -> (p { zpDomainParams = M.alter applyF domain (zpDomainParams p) }, ()))
+  where
+    applyF x = case x of
+      Just params -> Just $ f params
+      Nothing -> Just $ f defaultDomainParams
 
-zapBlacklist :: Zap -> T.Text -> IO ()
-zapBlacklist (paramsRef, _, _) newIp = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newIp : zpIpBlacklist p }, ()))
+zapWhitelist :: Zap -> DomainId -> T.Text -> IO ()
+zapWhitelist zap domain newIp = withDomainEntry zap domain (\params ->
+  params { zpIpWhitelist = newIp : zpIpWhitelist params } )
 
-zapSetWhitelist :: Zap -> [T.Text] -> IO ()
-zapSetWhitelist (paramsRef, _, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpWhitelist = newList }, ())) 
+zapBlacklist :: Zap -> DomainId -> T.Text -> IO ()
+zapBlacklist zap domain newIp = withDomainEntry zap domain (\params ->
+  params { zpIpBlacklist = newIp : zpIpBlacklist params } )
 
-zapSetBlacklist :: Zap -> [T.Text] -> IO ()
-zapSetBlacklist (paramsRef, _, _) newList = atomicModifyIORef' paramsRef (\p -> (p { zpIpBlacklist = newList }, ()))
+zapSetWhitelist :: Zap -> DomainId -> [T.Text] -> IO ()
+zapSetWhitelist zap domain newList = withDomainEntry zap domain (\params ->
+  params { zpIpWhitelist = newList } )
 
-zapSetPlainCredentialsFilename :: Zap -> FilePath -> IO ()
-zapSetPlainCredentialsFilename (paramsRef, _, _) filepath = atomicModifyIORef' paramsRef (\p -> (p { zpPlainPasswordsFile = Just filepath }, ()))
+zapSetBlacklist :: Zap -> DomainId -> [T.Text] -> IO ()
+zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
+  params { zpIpBlacklist = newList } )
+
+zapSetPlainCredentialsFilename :: Zap -> DomainId -> FilePath -> IO ()
+zapSetPlainCredentialsFilename zap domain filepath = withDomainEntry zap domain (\params -> params { zpPlainPasswordsFile = Just filepath } )
 
 zapApplyCertificate :: CurveCertificate -> Socket a -> IO ()
 zapApplyCertificate cert sock = do
@@ -179,8 +201,9 @@ generateCertificate = do
   dSec <- z85Decode rSec
   return CurveCertificate { ccPubKey = dPub, ccPrivKey = Just dSec }
 
-zapAddClientCertificate :: Zap -> CurveCertificate -> IO ()
-zapAddClientCertificate (paramsRef, _, _) cert = atomicModifyIORef' paramsRef (\p -> (p { zpCurveCertificates = cert : zpCurveCertificates p }, ()))
+zapAddClientCertificate :: Zap -> DomainId -> CurveCertificate -> IO ()
+zapAddClientCertificate zap domain cert = withDomainEntry zap domain (\params ->
+  params { zpCurveCertificates = cert : (zpCurveCertificates params) } )
 
 loadCertificateFromFile :: FilePath -> IO (Either String CurveCertificate)
 loadCertificateFromFile fpath = eitherDecode . BL.fromStrict <$> B.readFile fpath
@@ -209,28 +232,30 @@ parseMessage (rVersion:rRqId:rDomain:rAddress:rIdentity:rMechanism:rCredentials)
       | otherwise = Nothing
 
 makeResponse :: ZapRequest -> ZapParams -> IO (NonEmpty B.ByteString)
-makeResponse msg params =
-  case zrqMechanism msg of
-    Null -> makeResponseForNull
-    Plain -> makeResponseForPlain
-    Curve -> makeResponseForCurve
+makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) of
+  Just domainParams -> 
+    case zrqMechanism msg of
+      Null -> makeResponseForNull domainParams
+      Plain -> makeResponseForPlain domainParams
+      Curve -> makeResponseForCurve domainParams
+  Nothing -> return $ make400Response (zrqRequestId msg) ""
   where
-    makeResponseForNull = return $ if listsAllow (zrqAddress msg)
+    makeResponseForNull domainParams = return $ if listsAllow (zrqAddress msg) domainParams
       then make200Response (zrqRequestId msg) ""
       else make400Response (zrqRequestId msg) ""
 
-    makeResponseForPlain = if not $ listsAllow (zrqAddress msg)
+    makeResponseForPlain domainParams = if not $ listsAllow (zrqAddress msg) domainParams
       then return $ make400Response (zrqRequestId msg) ""
       else case (zrqCredentials msg) of
         (username:password:_) -> do
-          v <- validatePlainCredentials (decodeUtf8 username) (decodeUtf8 password)
+          v <- validatePlainCredentials (decodeUtf8 username) (decodeUtf8 password) domainParams
           return $ if v
             then make200Response (zrqRequestId msg) ""
             else make400Response (zrqRequestId msg) ""
         _ -> return $ make400Response (zrqRequestId msg) ""
 
-    validatePlainCredentials username suppliedPassword = do
-      case zpPlainPasswordsFile params of
+    validatePlainCredentials username suppliedPassword domainParams = do
+      case zpPlainPasswordsFile domainParams of
         Just filename -> do
           filecontents <- TIO.readFile filename
           case L.lookup username (credentialsListFrom filecontents) of
@@ -243,23 +268,20 @@ makeResponse msg params =
       (un:pw:[]) -> Just (un, pw)
       _ -> Nothing
         
-    makeResponseForCurve = if not $ listsAllow (zrqAddress msg)
+    makeResponseForCurve domainParams = if not $ listsAllow (zrqAddress msg) domainParams
       then return $ make400Response (zrqRequestId msg) ""
       else case (zrqCredentials msg) of
         (pubkey:_) -> do
-          return $ if validateCurveCertificate pubkey
+          return $ if validateCurveCertificate pubkey domainParams
             then make200Response (zrqRequestId msg) ""
             else make400Response (zrqRequestId msg) ""
         _ -> return $ make400Response (zrqRequestId msg) ""
 
-    validateCurveCertificate pubkey = isJust $ L.find (\x -> ccPubKey x == pubkey) (zpCurveCertificates params)
+    validateCurveCertificate pubkey domainParams = isJust $ L.find (\x -> ccPubKey x == pubkey) (zpCurveCertificates domainParams)
 
-    listsAllow address = if not . null $ whitelist
-      then address `elem` whitelist
-      else address `notElem` blacklist
-
-    whitelist = zpIpWhitelist params
-    blacklist = zpIpBlacklist params
+    listsAllow address domainParams = if not . null $ (zpIpWhitelist domainParams)
+      then address `elem` (zpIpWhitelist domainParams)
+      else address `notElem` (zpIpBlacklist domainParams)
     
 make200Response rqid userId = encodeUtf8 "1.0" :| rqid : encodeUtf8 "200" : B.empty : encodeUtf8 userId : [B.empty]
 make400Response rqid userId = encodeUtf8 "1.0" :| rqid : encodeUtf8 "400" : B.empty : encodeUtf8 userId : [B.empty]
