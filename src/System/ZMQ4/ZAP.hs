@@ -44,6 +44,7 @@ After whitelist and blacklist checks are passed, other checks are performed.
 === NULL authentication scheme 
 
 In NULL authentication scheme all incoming connections are accepted, so if whitelist/blacklist checks are passed, the access is granted.
+By default, the NULL authentication scheme is enabled and can be disabled using 'zapAllowNullAuthenticationScheme'.
 
 === PLAIN authentication scheme
 
@@ -73,7 +74,8 @@ module System.ZMQ4.ZAP (
   zapAddClientCertificate,
   setZapDomain,
   loadCertificateFromFile,
-  saveCertificateToFile
+  saveCertificateToFile,
+  DomainId(..)
 ) where
 
 import           Control.Concurrent
@@ -138,6 +140,7 @@ instance Show CurveCertificate where
 reallyShow :: CurveCertificate -> String
 reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ (show . ccPrivKey) cert ++ " }"
 
+-- | Type alias for domains
 type DomainId = T.Text
 
 data ZapParams = ZapParams {
@@ -248,6 +251,11 @@ zapSetBlacklist :: Zap -> DomainId -> [T.Text] -> IO ()
 zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
   params { zpIpBlacklist = newList } )
 
+-- | Enable or disable NULL authentication scheme.
+-- In order to disable NULL, this function should be called like that:
+-- @
+-- zapAllowNullAuthenticationScheme zap domainId False
+-- @
 zapAllowNullAuthenticationScheme :: Zap -> DomainId -> Bool -> IO()
 zapAllowNullAuthenticationScheme  zap domain allow = withDomainEntry zap domain (\params ->
   params { zpAllowNull = allow } )
