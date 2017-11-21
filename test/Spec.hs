@@ -19,7 +19,7 @@ tests = testGroup "Tests" [unitTests]
 unitTests = testGroup "Unit tests" 
   [ testNullAuth, testPlainAuth, testCurveAuth ]
 
-testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied, testNullAuthDeniedIfInvalidDomain ]
+testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied, testNullAuthDeniedIfInvalidDomain, testNullAuthDeniedIfNullIsNotAllowed ]
 
 testPlainAuth = testGroup "Testing Plain authentication mechanism" [ testPlainAuthOk, testPlainAuthInvalidPassword ]
 
@@ -56,9 +56,10 @@ testNullAuthDenied = testCase "Blacklist scenario" $ do
           connect client $ testendpoint 7738
 
           send client [] $ encodeUtf8 "foobar"
+          threadDelay 100000
+
           events <- poll 100 [Sock server [In] Nothing]
-          assertBool "" (null . head $ events)
-          ))))
+          assertBool "" (null . head $ events)))))
 
 testNullAuthDeniedIfInvalidDomain = testCase "Unknown domain scenario" $ do
   withContext (\ctx -> do
@@ -73,9 +74,29 @@ testNullAuthDeniedIfInvalidDomain = testCase "Unknown domain scenario" $ do
           connect client $ testendpoint 7744
 
           send client [] $ encodeUtf8 "foobar"
+
+          threadDelay 100000
           events <- poll 100 [Sock server [In] Nothing]
           assertBool "" (null . head $ events)
           ))))
+
+testNullAuthDeniedIfNullIsNotAllowed = testCase "NULL disallowed scenario" $ withContext (\ctx -> do
+  withSocket ctx Rep (\server -> do
+    setLinger (restrict 0) server
+    withSocket ctx Req (\client -> do
+      setLinger (restrict 0) client
+      withZapHandler ctx (\zap -> do
+        zapAllowNullAuthenticationScheme zap "global" False
+        zapWhitelist zap "global" "127.0.0.1"
+        setZapDomain "global" server
+        bind server $ testendpoint 7745
+        connect client $ testendpoint 7745
+        threadDelay 100000
+
+        send client [] $ encodeUtf8 "foobar"
+        events <- poll 100 [Sock server [In] Nothing]
+        assertBool "" (null . head $ events)))))
+  
   
 testPlainAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
   withSocket ctx Rep (\server -> do

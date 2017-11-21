@@ -4,12 +4,14 @@
 Module      : System.ZMQ4.ZAP
 Description : ZAP implementation for zeromq4-haskell
 Copyright   : (c) Denis Tereshkin, 2017
-License     : 3-Clause BSD3-Clause BSD3-Clause BSD
+License     : 3-Clause BSD
 Maintainer  : Denis Tereshkin <denis@kasan.ws>
 Stability   : experimental
 Portability : non-portable
 
 Simple ZeroMQ Authentication Protocol (ZAP) implementation for zeromq4-haskell.
+
+Example of usage with NULL authentication scheme:
 
   @
 withContext (\ctx -> do
@@ -25,6 +27,33 @@ withContext (\ctx -> do
         v <- receive server
         print v))))
   @
+ 
+Here, we create two sockets - server and client and then add localhost in the whitelist.
+
+More examples can be found in test/Spec.hs
+
+== Few notes about how this library works
+
+For all authentication schemes, if no configuration is available for requested domain then authentication fails.
+
+Whitelisting/blacklisting work as follows: if the whitelist is not empty, then all IPs that are not present in the whitelist are denied.
+The blacklist in this case is not used. If the whitelist is empty, then incoming connection IP is checked against the blacklist.
+
+After whitelist and blacklist checks are passed, other checks are performed.
+
+=== NULL authentication scheme 
+
+In NULL authentication scheme all incoming connections are accepted, so if whitelist/blacklist checks are passed, the access is granted.
+
+=== PLAIN authentication scheme
+
+In this case, the login/password pair is looked up in specified (unencrypted!) credentials file.
+
+=== CURVE authentication scheme
+
+If CURVE authentication scheme is requested, ZAP server tries to find given client certificate in the list of known certificates. If it is found, access is granted.
+
+
  -}
 module System.ZMQ4.ZAP (
   CurveCertificate(..),
@@ -35,6 +64,7 @@ module System.ZMQ4.ZAP (
   zapBlacklist,
   zapSetWhitelist,
   zapSetBlacklist,
+  zapAllowNullAuthenticationScheme,
   zapSetPlainCredentialsFilename,
   zapApplyCertificate,
   zapSetServerCertificate,
@@ -119,14 +149,16 @@ data ZapDomainParams = ZapDomainParams {
   zpIpWhitelist        :: [T.Text],
   zpIpBlacklist        :: [T.Text],
   zpPlainPasswordsFile :: Maybe FilePath,
-  zpCurveCertificates  :: [CurveCertificate]
+  zpCurveCertificates  :: [CurveCertificate],
+  zpAllowNull          :: Bool
 }
 
 defaultDomainParams = ZapDomainParams {
   zpIpWhitelist = [],
   zpIpBlacklist = [],
   zpPlainPasswordsFile = Nothing,
-  zpCurveCertificates = []
+  zpCurveCertificates = [],
+  zpAllowNull = True
 }
 
 type Zap = (IORef ZapParams, Context, ThreadId)
@@ -216,6 +248,10 @@ zapSetBlacklist :: Zap -> DomainId -> [T.Text] -> IO ()
 zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
   params { zpIpBlacklist = newList } )
 
+zapAllowNullAuthenticationScheme :: Zap -> DomainId -> Bool -> IO()
+zapAllowNullAuthenticationScheme  zap domain allow = withDomainEntry zap domain (\params ->
+  params { zpAllowNull = allow } )
+
 zapSetPlainCredentialsFilename :: Zap -> DomainId -> FilePath -> IO ()
 zapSetPlainCredentialsFilename zap domain filepath = withDomainEntry zap domain (\params -> params { zpPlainPasswordsFile = Just filepath } )
 
@@ -283,8 +319,10 @@ makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) 
       Curve -> makeResponseForCurve domainParams
   Nothing -> return $ make400Response (zrqRequestId msg) ""
   where
-    makeResponseForNull domainParams = return $ if listsAllow (zrqAddress msg) domainParams
-      then make200Response (zrqRequestId msg) ""
+    makeResponseForNull domainParams = return $ if (zpAllowNull domainParams)
+      then if listsAllow (zrqAddress msg) domainParams
+        then make200Response (zrqRequestId msg) ""
+        else make400Response (zrqRequestId msg) ""
       else make400Response (zrqRequestId msg) ""
 
     makeResponseForPlain domainParams = if not $ listsAllow (zrqAddress msg) domainParams
