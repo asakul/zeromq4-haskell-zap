@@ -58,6 +58,7 @@ If CURVE authentication scheme is requested, ZAP server tries to find given clie
  -}
 module System.ZMQ4.ZAP (
   CurveCertificate(..),
+  reallyShow,
   startZapHandler,
   stopZapHandler,
   withZapHandler,
@@ -128,7 +129,7 @@ instance ToJSON CurveCertificate where
     Just privKey -> [ "secret_key" .= (decodeUtf8 . B64.encode $ privKey) ]
     Nothing      -> []
 
--- | Show instance for CurveCertificate. Hides private key. To show a certificate with private key, use reallyShow.
+-- | Show instance for CurveCertificate. Masks private key. To show a certificate with private key, use 'reallyShow'.
 instance Show CurveCertificate where
   show cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ privKey ++ " }"
     where
@@ -220,7 +221,7 @@ stopZapHandler (params, ctx, tid) = do
     send signalSock [] B.empty)
   void $ takeMVar mv
 
--- | Executes specified action in a bracket of startZapHandler and stopZapHandler
+-- | Executes specified action in a bracket of 'startZapHandler' and 'stopZapHandler'
 withZapHandler :: Context -> (Zap -> IO a) -> IO a
 withZapHandler ctx action = bracket (startZapHandler ctx) stopZapHandler action
 
@@ -252,7 +253,7 @@ zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
   params { zpIpBlacklist = newList } )
 
 -- | Enable or disable NULL authentication scheme.
--- In order to disable NULL, this function should be called like that:
+-- In order to disable it, this function should be called like that:
 -- @
 -- zapAllowNullAuthenticationScheme zap domainId False
 -- @
