@@ -1,5 +1,31 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+{-|
+Module      : System.ZMQ4.ZAP
+Description : ZAP implementation for zeromq4-haskell
+Copyright   : (c) Denis Tereshkin, 2017
+License     : 3-Clause BSD3-Clause BSD3-Clause BSD
+Maintainer  : Denis Tereshkin <denis@kasan.ws>
+Stability   : experimental
+Portability : non-portable
+
+Simple ZeroMQ Authentication Protocol (ZAP) implementation for zeromq4-haskell.
+
+  @
+withContext (\ctx -> do
+  withSocket ctx Rep (\server -> do
+    withSocket ctx Req (\client -> do
+      withZapHandler ctx (\zap -> do
+        zapWhitelist zap "global" "127.0.0.1"
+        setZapDomain "global" server
+        bind server "tcp://127.0.0.1:7737"
+        connect client "tcp://127.0.0.1:7737"
+
+        send client [] $ encodeUtf8 "foobar"
+        v <- receive server
+        print v))))
+  @
+ -}
 module System.ZMQ4.ZAP (
   CurveCertificate(..),
   startZapHandler,
@@ -45,6 +71,7 @@ import           System.ZMQ4
 import           System.ZMQ4.Internal
 import qualified System.ZMQ4.Internal.Base as ZB
 
+-- | CURVE Certificate representation
 data CurveCertificate = CurveCertificate {
   ccPubKey  :: B.ByteString,
   ccPrivKey :: Maybe B.ByteString
@@ -69,6 +96,7 @@ instance ToJSON CurveCertificate where
     Just privKey -> [ "secret_key" .= (decodeUtf8 . B64.encode $ privKey) ]
     Nothing      -> []
 
+-- | Show instance for CurveCertificate. Hides private key. To show a certificate with private key, use reallyShow.
 instance Show CurveCertificate where
   show cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ privKey ++ " }"
     where
@@ -76,6 +104,7 @@ instance Show CurveCertificate where
         Just key -> "***"
         Nothing  -> "Nothing"
 
+-- | Shows CurveCertificate with unmasked private key.
 reallyShow :: CurveCertificate -> String
 reallyShow cert = "CurveCertificate { ccPubKey = " ++ (show . ccPubKey) cert ++ ", ccPrivKey = " ++ (show . ccPrivKey) cert ++ " }"
 
@@ -118,6 +147,7 @@ zapEndpoint = "inproc://zeromq.zap.01"
 setZapDomain :: DomainId -> Socket a -> IO ()
 setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
 
+-- | Starts ZAP handling thread
 startZapHandler :: Context -> IO Zap
 startZapHandler ctx = do
   killmv <- newEmptyMVar
@@ -146,6 +176,7 @@ startZapHandler ctx = do
       putMVar killmv ()))
   return (paramsRef, ctx, tid)
 
+-- | Shuts ZAP handler thread down
 stopZapHandler :: Zap -> IO ()
 stopZapHandler (params, ctx, tid) = do
   mv <- zpMv <$> readIORef params
@@ -154,6 +185,7 @@ stopZapHandler (params, ctx, tid) = do
     send signalSock [] B.empty)
   void $ takeMVar mv
 
+-- | Executes specified action in a bracket of startZapHandler and stopZapHandler
 withZapHandler :: Context -> (Zap -> IO a) -> IO a
 withZapHandler ctx action = bracket (startZapHandler ctx) stopZapHandler action
 
@@ -164,18 +196,22 @@ withDomainEntry (paramsRef, _, _)  domain f = atomicModifyIORef' paramsRef (\p -
       Just params -> Just $ f params
       Nothing     -> Just $ f defaultDomainParams
 
+-- | Adds given IP to a whitelist for a specified domain
 zapWhitelist :: Zap -> DomainId -> T.Text -> IO ()
 zapWhitelist zap domain newIp = withDomainEntry zap domain (\params ->
   params { zpIpWhitelist = newIp : zpIpWhitelist params } )
 
+-- | Adds given IP to a blacklist for a specified domain
 zapBlacklist :: Zap -> DomainId -> T.Text -> IO ()
 zapBlacklist zap domain newIp = withDomainEntry zap domain (\params ->
   params { zpIpBlacklist = newIp : zpIpBlacklist params } )
 
+-- | Sets the whitelist for a specified domain
 zapSetWhitelist :: Zap -> DomainId -> [T.Text] -> IO ()
 zapSetWhitelist zap domain newList = withDomainEntry zap domain (\params ->
   params { zpIpWhitelist = newList } )
 
+-- | Sets the blacklist for a specified domain
 zapSetBlacklist :: Zap -> DomainId -> [T.Text] -> IO ()
 zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
   params { zpIpBlacklist = newList } )
@@ -183,6 +219,7 @@ zapSetBlacklist zap domain newList = withDomainEntry zap domain (\params ->
 zapSetPlainCredentialsFilename :: Zap -> DomainId -> FilePath -> IO ()
 zapSetPlainCredentialsFilename zap domain filepath = withDomainEntry zap domain (\params -> params { zpPlainPasswordsFile = Just filepath } )
 
+-- | Makes socket use given certificate
 zapApplyCertificate :: CurveCertificate -> Socket a -> IO ()
 zapApplyCertificate cert sock = do
   setCurvePublicKey BinaryFormat (restrict $ ccPubKey cert) sock
@@ -190,12 +227,15 @@ zapApplyCertificate cert sock = do
     Just key -> setCurveSecretKey BinaryFormat (restrict $ key) sock
     Nothing  -> return ()
 
+-- | Sets a server certificate for a socket
 zapSetServerCertificate :: CurveCertificate -> Socket a -> IO ()
 zapSetServerCertificate cert sock = setCurveServerKey BinaryFormat (restrict $ ccPubKey cert) sock
 
+-- | Remove private key from a certificate
 withoutSecretKey :: CurveCertificate -> CurveCertificate
 withoutSecretKey cert = cert { ccPrivKey = Nothing }
 
+-- | Generate a new certificate
 generateCertificate :: IO CurveCertificate
 generateCertificate = do
   (rPub, rSec) <- curveKeyPair
@@ -203,6 +243,7 @@ generateCertificate = do
   dSec <- z85Decode rSec
   return CurveCertificate { ccPubKey = dPub, ccPrivKey = Just dSec }
 
+-- | Adds given client certificate to the domain
 zapAddClientCertificate :: Zap -> DomainId -> CurveCertificate -> IO ()
 zapAddClientCertificate zap domain cert = withDomainEntry zap domain (\params ->
   params { zpCurveCertificates = cert : (zpCurveCertificates params) } )
