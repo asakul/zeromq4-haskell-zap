@@ -19,7 +19,7 @@ tests = testGroup "Tests" [unitTests]
 unitTests = testGroup "Unit tests" 
   [ testNullAuth, testPlainAuth, testCurveAuth ]
 
-testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied ]
+testNullAuth = testGroup "Testing NULL authentication mechanism" [ testNullAuthOk, testNullAuthDenied, testNullAuthDeniedIfInvalidDomain ]
 
 testPlainAuth = testGroup "Testing Plain authentication mechanism" [ testPlainAuthOk, testPlainAuthInvalidPassword ]
 
@@ -33,7 +33,7 @@ testNullAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
     withSocket ctx Req (\client -> do
       setLinger (restrict 0) client
       withZapHandler ctx (\zap -> do
-        zapWhitelist zap "127.0.0.1"
+        zapWhitelist zap "global" "127.0.0.1"
         setZapDomain "global" server
         bind server $ testendpoint 7737
         connect client $ testendpoint 7737
@@ -50,10 +50,27 @@ testNullAuthDenied = testCase "Blacklist scenario" $ do
       withSocket ctx Req (\client -> do
         setLinger (restrict 0) client
         withZapHandler ctx (\zap -> do
-          zapBlacklist zap "127.0.0.1"
+          zapBlacklist zap "global" "127.0.0.1"
           setZapDomain "global" server
           bind server $ testendpoint 7738
           connect client $ testendpoint 7738
+
+          send client [] $ encodeUtf8 "foobar"
+          events <- poll 100 [Sock server [In] Nothing]
+          assertBool "" (null . head $ events)
+          ))))
+
+testNullAuthDeniedIfInvalidDomain = testCase "Unknown domain scenario" $ do
+  withContext (\ctx -> do
+    withSocket ctx Rep (\server -> do
+      setLinger (restrict 0) server
+      withSocket ctx Req (\client -> do
+        setLinger (restrict 0) client
+        withZapHandler ctx (\zap -> do
+          zapBlacklist zap "unknown_domain" "127.0.0.1"
+          setZapDomain "global" server
+          bind server $ testendpoint 7744
+          connect client $ testendpoint 7744
 
           send client [] $ encodeUtf8 "foobar"
           events <- poll 100 [Sock server [In] Nothing]
@@ -63,10 +80,11 @@ testNullAuthDenied = testCase "Blacklist scenario" $ do
 testPlainAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
   withSocket ctx Rep (\server -> do
     setLinger (restrict 0) server
+    setZapDomain "global" server
     withSocket ctx Req (\client -> do
       setLinger (restrict 0) client
       withZapHandler ctx (\zap -> do
-        zapSetPlainCredentialsFilename zap "test/secret"
+        zapSetPlainCredentialsFilename zap "global" "test/secret"
         setPlainServer True server
         setPlainUserName (restrict $ encodeUtf8 "testuser") client
         setPlainPassword (restrict $ encodeUtf8 "testpassword") client
@@ -82,10 +100,11 @@ testPlainAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
 testPlainAuthInvalidPassword = testCase "Invalid password, existing user" $ withContext (\ctx -> do
   withSocket ctx Rep (\server -> do
     setLinger (restrict 0) server
+    setZapDomain "global" server
     withSocket ctx Req (\client -> do
       setLinger (restrict 0) client
       withZapHandler ctx (\zap -> do
-        zapSetPlainCredentialsFilename zap "test/secret"
+        zapSetPlainCredentialsFilename zap "global" "test/secret"
         setPlainServer True server
         setPlainUserName (restrict $ encodeUtf8 "testuser") client
         setPlainPassword (restrict $ encodeUtf8 "invalid password") client
@@ -101,6 +120,7 @@ testPlainAuthInvalidPassword = testCase "Invalid password, existing user" $ with
 testCurveAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
   withSocket ctx Rep (\server -> do
     setLinger (restrict 0) server
+    setZapDomain "global" server
     serverCert <- generateCertificate
     setCurveServer True server
     zapApplyCertificate serverCert server
@@ -113,7 +133,7 @@ testCurveAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
       zapSetServerCertificate (withoutSecretKey serverCert) client
 
       withZapHandler ctx (\zap -> do
-        zapAddClientCertificate zap (withoutSecretKey clientCert)
+        zapAddClientCertificate zap "global" (withoutSecretKey clientCert)
         bind server $ testendpoint 7741
         connect client $ testendpoint 7741
         threadDelay 100000
@@ -125,6 +145,7 @@ testCurveAuthOk = testCase "Successful scenario" $ withContext (\ctx -> do
 testCurveInvalidCertificate = testCase "Invalid Client Pubkey" $ withContext (\ctx -> do
   withSocket ctx Rep (\server -> do
     setLinger (restrict 0) server
+    setZapDomain "global" server
     serverCert <- generateCertificate
     setCurveServer True server
     zapApplyCertificate serverCert server

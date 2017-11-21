@@ -4,20 +4,20 @@ module Main (
 ) where
 
 
-import Data.Monoid
-import Options.Applicative
-import System.ZMQ4.ZAP
+import           Data.Monoid
+import           Options.Applicative
+import           System.ZMQ4.ZAP
 
 data Params = Params {
   fullCertFile :: FilePath,
-  pubKeyFile :: FilePath
+  pubKeyFile   :: FilePath
 } deriving (Show, Eq)
 
 paramsParser :: Parser Params
 paramsParser = Params
   <$> strOption (long "cert-file" <> metavar "FILEPATH")
   <*> strOption (long "pub-file" <> metavar "FILEPATH")
-  
+
 
 main :: IO ()
 main = do
