@@ -1,5 +1,5 @@
 name:                zeromq4-haskell-zap
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            ZAP support for zeromq
 description:         Please see README.md
 homepage:            https://github.com/asakul/zeromq4-haskell-zap

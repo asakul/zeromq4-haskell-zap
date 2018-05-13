@@ -19,7 +19,7 @@ withContext (\ctx -> do
     withSocket ctx Req (\client -> do
       withZapHandler ctx (\zap -> do
         zapWhitelist zap "global" "127.0.0.1"
-        setZapDomain "global" server
+        setZapDomain (restrict $ encodeUtf8 "global") server
         bind server "tcp://127.0.0.1:7737"
         connect client "tcp://127.0.0.1:7737"
 
@@ -73,7 +73,6 @@ module System.ZMQ4.ZAP (
   withoutSecretKey,
   generateCertificate,
   zapAddClientCertificate,
-  setZapDomain,
   loadCertificateFromFile,
   saveCertificateToFile,
   DomainId(..)
@@ -180,8 +179,8 @@ data ZapRequest = ZapRequest {
 zapSignalEndpoint = "inproc://zeromq.zap.01-signal"
 zapEndpoint = "inproc://zeromq.zap.01"
 
-setZapDomain :: DomainId -> Socket a -> IO ()
-setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
+--setZapDomain :: DomainId -> Socket a -> IO ()
+--setZapDomain domain sock = setByteStringOpt sock ZB.zapDomain (encodeUtf8 domain)
 
 -- | Starts ZAP handling thread
 startZapHandler :: Context -> IO Zap
