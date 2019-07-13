@@ -27,7 +27,7 @@ withContext (\ctx -> do
         v <- receive server
         print v))))
   @
- 
+
 Here, we create two sockets - server and client and then add localhost in the whitelist.
 
 More examples can be found in test/Spec.hs
@@ -41,7 +41,7 @@ The blacklist in this case is not used. If the whitelist is empty, then incoming
 
 After whitelist and blacklist checks are passed, other checks are performed.
 
-=== NULL authentication scheme 
+=== NULL authentication scheme
 
 In NULL authentication scheme all incoming connections are accepted, so if whitelist/blacklist checks are passed, the access is granted.
 By default, the NULL authentication scheme is enabled and can be disabled using 'zapAllowNullAuthenticationScheme'.
@@ -329,7 +329,10 @@ makeResponse msg params = case M.lookup (zrqDomain msg) (zpDomainParams params) 
   where
     makeResponseForNull domainParams = return $ if (zpAllowNull domainParams)
       then if listsAllow (zrqAddress msg) domainParams
-        then make200Response (zrqRequestId msg) ""
+        then do
+          if (not . null) (zpCurveCertificates domainParams) || isJust (zpPlainPasswordsFile domainParams)
+            then make400Response (zrqRequestId msg) ""
+            else make200Response (zrqRequestId msg) ""
         else make400Response (zrqRequestId msg) ""
       else make400Response (zrqRequestId msg) ""
 
